@@ -1,32 +1,32 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { authApi, LoginRequest } from "@/lib/api/auth";
-import { usersApi } from "@/lib/api/users";
+import { useQueryClient } from "@tanstack/react-query";
+import { useLogin, useProfile } from "@/src/hooks/api/auth";
+import { useMe } from "@/src/hooks/api/users";
+import type { LoginRequest } from "@/src/hooks/api/auth";
 
 export function useAuth() {
   const router = useRouter();
   const queryClient = useQueryClient();
 
-  const { data: user, isLoading } = useQuery({
-    queryKey: ["user", "me"],
-    queryFn: () => usersApi.getMe(),
-    enabled: typeof window !== "undefined" && !!localStorage.getItem("teamflow_token"),
-    retry: false,
-  });
+  const { data: user, isLoading } = useMe();
+  const loginMutation = useLogin();
 
-  const loginMutation = useMutation({
-    mutationFn: (data: LoginRequest) => authApi.login(data),
-    onSuccess: (response) => {
-      localStorage.setItem("teamflow_token", response.access_token);
-      queryClient.setQueryData(["user", "me"], response.user);
+  const login = async (data: LoginRequest) => {
+    try {
+      const response = await loginMutation.mutateAsync(data);
+      queryClient.setQueryData(["users", "me"], response.user);
       router.push("/dashboard");
-    },
-  });
+    } catch (error) {
+      throw error;
+    }
+  };
 
   const logout = () => {
-    localStorage.removeItem("teamflow_token");
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("teamflow_token");
+    }
     queryClient.clear();
     router.push("/login");
   };
@@ -34,7 +34,7 @@ export function useAuth() {
   return {
     user,
     isLoading,
-    login: loginMutation.mutate,
+    login,
     isLoggingIn: loginMutation.isPending,
     logout,
   };

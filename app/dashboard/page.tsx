@@ -1,29 +1,24 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { useProtectedRoute } from "@/hooks/useProtectedRoute";
-import { usersApi } from "@/lib/api/users";
-import { teamsApi } from "@/lib/api/teams";
+import { useMe } from "@/src/hooks/api/users";
+import { useTeams } from "@/src/hooks/api/teams";
 import { Navbar } from "@/components/navbar";
 import { Sidebar } from "@/components/sidebar";
 import { TeamCard } from "@/components/team-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useRouter } from "next/navigation";
 
 export default function DashboardPage() {
   const { user, isLoading: isAuthLoading } = useProtectedRoute();
 
-  const { data: userData, isLoading: isUserLoading } = useQuery({
-    queryKey: ["user", "me"],
-    queryFn: () => usersApi.getMe(),
-    enabled: !!user,
-  });
+  const router = useRouter();
 
-  const { data: teams, isLoading: isTeamsLoading } = useQuery({
-    queryKey: ["teams"],
-    queryFn: () => teamsApi.listTeams(),
-    enabled: !!user,
-  });
+  const { data: userData, isLoading: isUserLoading } = useMe();
+
+  const { data: teamsResponse, isLoading: isTeamsLoading } = useTeams();
+  const teams = teamsResponse?.data || [];
 
   if (isAuthLoading || isUserLoading) {
     return (
@@ -43,13 +38,18 @@ export default function DashboardPage() {
             <div>
               <h1 className="text-3xl font-bold">Dashboard</h1>
               <p className="text-muted-foreground mt-2">
-                Welcome back, {userData?.name || userData?.email}
+                Welcome back, {userData?.username || userData?.email}
               </p>
             </div>
 
             <Card>
               <CardHeader>
-                <CardTitle>Your Teams</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Your Teams</CardTitle>
+                  <Button onClick={() => router.push("/teams/create")}>
+                    Create Team
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 {isTeamsLoading ? (
@@ -62,8 +62,9 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   <div className="text-center py-8">
-                    <p className="text-muted-foreground mb-4">No teams yet</p>
-                    <Button>Create Team</Button>
+                    <p className="text-muted-foreground mb-4">
+                      No teams yet. Create your first team to get started.
+                    </p>
                   </div>
                 )}
               </CardContent>

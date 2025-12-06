@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Team } from "@/lib/api/teams";
+import type { Team } from "@/src/hooks/api/teams";
 
 interface TeamCardProps {
   team: Team;

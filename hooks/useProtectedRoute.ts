@@ -9,7 +9,9 @@ export function useProtectedRoute() {
   const { user, isLoading } = useAuth();
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    const token = typeof window !== "undefined" ? localStorage.getItem("teamflow_token") : null;
+    
+    if (!isLoading && !user && !token) {
       router.push("/login");
     }
   }, [user, isLoading, router]);

@@ -1,21 +1,35 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useProtectedRoute } from "@/hooks/useProtectedRoute";
-import { teamsApi } from "@/lib/api/teams";
-import { projectsApi } from "@/lib/api/projects";
+import {
+  useTeam,
+  useUpdateTeam,
+  useDeleteTeam,
+  useAddTeamMember,
+  useRemoveTeamMember,
+  useUpdateMemberRole,
+  useLeaveTeam,
+  TeamRole,
+} from "@/src/hooks/api/teams";
+import { useUsers } from "@/src/hooks/api/users";
+import { showErrorToast, showSuccessToast } from "@/lib/error-handler";
 import { Navbar } from "@/components/navbar";
 import { Sidebar } from "@/components/sidebar";
-import { ProjectCard } from "@/components/project-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -25,61 +39,194 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Trash2, UserPlus, LogOut, Shield, User } from "lucide-react";
 
-const projectSchema = z.object({
+const updateTeamSchema = z.object({
   name: z.string().min(1, "Name is required"),
   description: z.string().optional(),
+  icon: z.string().optional(),
 });
 
-type ProjectFormData = z.infer<typeof projectSchema>;
+const addMemberSchema = z.object({
+  userId: z.string().min(1, "User is required"),
+  role: z.nativeEnum(TeamRole).optional(),
+});
+
+type UpdateTeamFormData = z.infer<typeof updateTeamSchema>;
+type AddMemberFormData = z.infer<typeof addMemberSchema>;
 
 export default function TeamPage() {
   const params = useParams();
   const router = useRouter();
   const teamId = params.teamId as string;
-  const { user } = useProtectedRoute();
-  const queryClient = useQueryClient();
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const { user: currentUser } = useProtectedRoute();
 
-  const { data: team, isLoading: isTeamLoading } = useQuery({
-    queryKey: ["teams", teamId],
-    queryFn: () => teamsApi.getTeam(teamId),
-    enabled: !!user && !!teamId,
+  const { data: team, isLoading: isTeamLoading } = useTeam(teamId);
+  const { data: users } = useUsers({
+    page: "0",
+    limit: "100",
+    sort: "asc",
   });
 
-  const { data: projects, isLoading: isProjectsLoading } = useQuery({
-    queryKey: ["projects", teamId],
-    queryFn: () => projectsApi.listProjects(teamId),
-    enabled: !!user && !!teamId,
-  });
+  const updateTeam = useUpdateTeam();
+  const deleteTeam = useDeleteTeam();
+  const addMember = useAddTeamMember();
+  const removeMember = useRemoveTeamMember();
+  const updateMemberRole = useUpdateMemberRole();
+  const leaveTeam = useLeaveTeam();
 
-  const createProjectMutation = useMutation({
-    mutationFn: (data: ProjectFormData) =>
-      projectsApi.createProject({ ...data, teamId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects", teamId] });
-      setIsDialogOpen(false);
-    },
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isAddMemberDialogOpen, setIsAddMemberDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+
+  const {
+    register: registerUpdate,
+    handleSubmit: handleSubmitUpdate,
+    formState: { errors: updateErrors },
+    reset: resetUpdate,
+  } = useForm<UpdateTeamFormData>({
+    resolver: zodResolver(updateTeamSchema),
+    values: team
+      ? {
+          name: team.name,
+          description: team.description || "",
+          icon: team.icon || "",
+        }
+      : undefined,
   });
 
   const {
-    register,
-    handleSubmit,
-    formState: { errors },
-    reset,
-  } = useForm<ProjectFormData>({
-    resolver: zodResolver(projectSchema),
+    register: registerAddMember,
+    handleSubmit: handleSubmitAddMember,
+    formState: { errors: addMemberErrors },
+    reset: resetAddMember,
+  } = useForm<AddMemberFormData>({
+    resolver: zodResolver(addMemberSchema),
   });
 
-  const onSubmit = async (data: ProjectFormData) => {
-    await createProjectMutation.mutateAsync(data);
-    reset();
+  const isAdmin = team?.members.find(
+    (m) => m.userId === currentUser?.id && m.role === TeamRole.ADMIN
+  );
+
+  const isMember = team?.members.some((m) => m.userId === currentUser?.id);
+
+  const availableUsers =
+    users?.filter(
+      (u) => !team?.members.some((m) => m.userId === u.id)
+    ) || [];
+
+  const onSubmitUpdate = async (data: UpdateTeamFormData) => {
+    if (!isAdmin) return;
+    try {
+      await updateTeam.mutateAsync({
+        id: teamId,
+        data: {
+          name: data.name,
+          description: data.description || undefined,
+          icon: data.icon || undefined,
+        },
+      });
+      showSuccessToast("Team updated successfully!");
+      setIsEditDialogOpen(false);
+    } catch (error) {
+      showErrorToast(error, "Failed to update team.");
+    }
+  };
+
+  const onSubmitAddMember = async (data: AddMemberFormData) => {
+    if (!isAdmin) return;
+    try {
+      await addMember.mutateAsync({
+        teamId,
+        data: {
+          userId: data.userId,
+          role: data.role || TeamRole.MEMBER,
+        },
+      });
+      showSuccessToast("Member added successfully!");
+      setIsAddMemberDialogOpen(false);
+      resetAddMember();
+    } catch (error) {
+      showErrorToast(error, "Failed to add member.");
+    }
+  };
+
+  const handleRemoveMember = async (userId: string) => {
+    if (!isAdmin) return;
+    if (
+      confirm(
+        "Are you sure you want to remove this member from the team?"
+      )
+    ) {
+      try {
+        await removeMember.mutateAsync({ teamId, userId });
+        showSuccessToast("Member removed successfully!");
+      } catch (error) {
+        showErrorToast(error, "Failed to remove member.");
+      }
+    }
+  };
+
+  const handleUpdateRole = async (userId: string, role: TeamRole) => {
+    if (!isAdmin) return;
+    try {
+      await updateMemberRole.mutateAsync({
+        teamId,
+        userId,
+        data: { role },
+      });
+      showSuccessToast("Member role updated successfully!");
+    } catch (error) {
+      showErrorToast(error, "Failed to update member role.");
+    }
+  };
+
+  const handleLeaveTeam = async () => {
+    if (
+      confirm(
+        "Are you sure you want to leave this team? You will need to be re-invited to rejoin."
+      )
+    ) {
+      try {
+        await leaveTeam.mutateAsync(teamId);
+        showSuccessToast("You have left the team.");
+        router.push("/dashboard");
+      } catch (error) {
+        showErrorToast(error, "Failed to leave team.");
+      }
+    }
+  };
+
+  const handleDeleteTeam = async () => {
+    if (!isAdmin) return;
+    if (
+      confirm(
+        "Are you sure you want to delete this team? This action cannot be undone."
+      )
+    ) {
+      try {
+        await deleteTeam.mutateAsync(teamId);
+        showSuccessToast("Team deleted successfully!");
+        router.push("/dashboard");
+      } catch (error) {
+        showErrorToast(error, "Failed to delete team.");
+      }
+    }
   };
 
   if (isTeamLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p>Loading...</p>
+      </div>
+    );
+  }
+
+  if (!team) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Team not found</p>
       </div>
     );
   }
@@ -93,72 +240,285 @@ export default function TeamPage() {
           <div className="max-w-7xl mx-auto space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-3xl font-bold">{team?.name}</h1>
-                {team?.description && (
+                <div className="flex items-center gap-3">
+                  <h1 className="text-3xl font-bold">{team.name}</h1>
+                  {isAdmin && (
+                    <Badge variant="outline" className="flex items-center gap-1">
+                      <Shield className="h-3 w-3" />
+                      Admin
+                    </Badge>
+                  )}
+                </div>
+                {team.description && (
                   <p className="text-muted-foreground mt-2">{team.description}</p>
                 )}
               </div>
-              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button>Create Project</Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Create New Project</DialogTitle>
-                    <DialogDescription>
-                      Add a new project to this team. Click save when you're done.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="name">Project Name</Label>
-                      <Input id="name" {...register("name")} placeholder="My Project" />
-                      {errors.name && (
-                        <p className="text-sm text-destructive">{errors.name.message}</p>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="description">Description (Optional)</Label>
-                      <Input
-                        id="description"
-                        {...register("description")}
-                        placeholder="Project description"
-                      />
-                    </div>
-                    <DialogFooter>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setIsDialogOpen(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button type="submit" disabled={createProjectMutation.isPending}>
-                        {createProjectMutation.isPending ? "Creating..." : "Create"}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
+              <div className="flex gap-2">
+                {isAdmin && (
+                  <>
+                    <Dialog
+                      open={isEditDialogOpen}
+                      onOpenChange={setIsEditDialogOpen}
+                    >
+                      <DialogTrigger asChild>
+                        <Button variant="outline">Edit Team</Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Edit Team</DialogTitle>
+                          <DialogDescription>
+                            Update team information. Click save when you're done.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <form
+                          onSubmit={handleSubmitUpdate(onSubmitUpdate)}
+                          className="space-y-4"
+                        >
+                          <div className="space-y-2">
+                            <Label htmlFor="name">Team Name</Label>
+                            <Input
+                              id="name"
+                              {...registerUpdate("name")}
+                              placeholder="Team name"
+                            />
+                            {updateErrors.name && (
+                              <p className="text-sm text-destructive">
+                                {updateErrors.name.message}
+                              </p>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="description">
+                              Description (Optional)
+                            </Label>
+                            <Input
+                              id="description"
+                              {...registerUpdate("description")}
+                              placeholder="Team description"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="icon">Icon URL (Optional)</Label>
+                            <Input
+                              id="icon"
+                              {...registerUpdate("icon")}
+                              placeholder="https://example.com/icon.png"
+                            />
+                          </div>
+                          <DialogFooter>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => setIsEditDialogOpen(false)}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              type="submit"
+                              disabled={updateTeam.isPending}
+                            >
+                              {updateTeam.isPending ? "Updating..." : "Update"}
+                            </Button>
+                          </DialogFooter>
+                        </form>
+                      </DialogContent>
+                    </Dialog>
+                    <Dialog
+                      open={isDeleteDialogOpen}
+                      onOpenChange={setIsDeleteDialogOpen}
+                    >
+                      <DialogTrigger asChild>
+                        <Button variant="destructive">Delete Team</Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Delete Team</DialogTitle>
+                          <DialogDescription>
+                            Are you sure you want to delete this team? This
+                            action cannot be undone.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <DialogFooter>
+                          <Button
+                            variant="outline"
+                            onClick={() => setIsDeleteDialogOpen(false)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            onClick={handleDeleteTeam}
+                            disabled={deleteTeam.isPending}
+                          >
+                            {deleteTeam.isPending ? "Deleting..." : "Delete"}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </>
+                )}
+                {isMember && !isAdmin && (
+                  <Button variant="outline" onClick={handleLeaveTeam}>
+                    <LogOut className="h-4 w-4 mr-2" />
+                    Leave Team
+                  </Button>
+                )}
+              </div>
             </div>
 
             <Card>
               <CardHeader>
-                <CardTitle>Projects</CardTitle>
-                <CardDescription>All projects in this team</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Team Members</CardTitle>
+                    <CardDescription>
+                      Manage team members and their roles
+                    </CardDescription>
+                  </div>
+                  {isAdmin && (
+                    <Dialog
+                      open={isAddMemberDialogOpen}
+                      onOpenChange={setIsAddMemberDialogOpen}
+                    >
+                      <DialogTrigger asChild>
+                        <Button>
+                          <UserPlus className="h-4 w-4 mr-2" />
+                          Add Member
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Add Team Member</DialogTitle>
+                          <DialogDescription>
+                            Add a user to this team. They will be added as a
+                            member by default.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <form
+                          onSubmit={handleSubmitAddMember(onSubmitAddMember)}
+                          className="space-y-4"
+                        >
+                          <div className="space-y-2">
+                            <Label htmlFor="userId">User</Label>
+                            <select
+                              id="userId"
+                              {...registerAddMember("userId")}
+                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            >
+                              <option value="">Select a user</option>
+                              {availableUsers.map((user) => (
+                                <option key={user.id} value={user.id}>
+                                  {user.username} ({user.email})
+                                </option>
+                              ))}
+                            </select>
+                            {addMemberErrors.userId && (
+                              <p className="text-sm text-destructive">
+                                {addMemberErrors.userId.message}
+                              </p>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="role">Role</Label>
+                            <select
+                              id="role"
+                              {...registerAddMember("role")}
+                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                              defaultValue={TeamRole.MEMBER}
+                            >
+                              <option value={TeamRole.MEMBER}>Member</option>
+                              <option value={TeamRole.ADMIN}>Admin</option>
+                            </select>
+                          </div>
+                          <DialogFooter>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => setIsAddMemberDialogOpen(false)}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              type="submit"
+                              disabled={addMember.isPending}
+                            >
+                              {addMember.isPending ? "Adding..." : "Add"}
+                            </Button>
+                          </DialogFooter>
+                        </form>
+                      </DialogContent>
+                    </Dialog>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
-                {isProjectsLoading ? (
-                  <p>Loading projects...</p>
-                ) : projects && projects.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {projects.map((project) => (
-                      <ProjectCard key={project.id} project={project} />
+                {team.members && team.members.length > 0 ? (
+                  <div className="space-y-3">
+                    {team.members.map((member) => (
+                      <div
+                        key={member.id}
+                        className="flex items-center justify-between p-3 border rounded-lg"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10">
+                            {member.role === TeamRole.ADMIN ? (
+                              <Shield className="h-5 w-5 text-primary" />
+                            ) : (
+                              <User className="h-5 w-5 text-primary" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium">
+                                {member.user.username}
+                              </p>
+                              <Badge
+                                variant={
+                                  member.role === TeamRole.ADMIN
+                                    ? "default"
+                                    : "secondary"
+                                }
+                              >
+                                {member.role}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {member.user.email}
+                            </p>
+                          </div>
+                        </div>
+                        {isAdmin && member.userId !== currentUser?.id && (
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={member.role}
+                              onChange={(e) =>
+                                handleUpdateRole(
+                                  member.userId,
+                                  e.target.value as TeamRole
+                                )
+                              }
+                              className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                              disabled={updateMemberRole.isPending}
+                            >
+                              <option value={TeamRole.MEMBER}>Member</option>
+                              <option value={TeamRole.ADMIN}>Admin</option>
+                            </select>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleRemoveMember(member.userId)}
+                              disabled={removeMember.isPending}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 ) : (
                   <div className="text-center py-8">
-                    <p className="text-muted-foreground">No projects yet. Create one to get started.</p>
+                    <p className="text-muted-foreground">No members yet.</p>
                   </div>
                 )}
               </CardContent>
@@ -169,4 +529,3 @@ export default function TeamPage() {
     </div>
   );
 }
-
